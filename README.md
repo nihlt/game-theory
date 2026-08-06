@@ -9,19 +9,23 @@ leaderboard.
 
 ARC-AGI-3-style tasks are designed to probe general reasoning rather than
 memorized patterns — a good fit for asking a very concrete question: **how
-well does an LLM track and plan around a small piece of changing state**
-(a key with three cyclic attributes) **compared to a human**, using nothing
-but a text description of the board?
+well does an LLM explore an unfamiliar environment and track a small piece
+of changing state** (a key with three cyclic attributes) **compared to a
+human**, from the same screenshots a human sees — not a pre-digested
+description of the board?
 
 What we're trying to get out of it:
 
 - **A fair, repeatable comparison.** Human and LLM play the exact same levels
   (each pre-verified solvable by BFS), and every run is scored the same way
   (levels completed, then actions, then time) on one leaderboard.
-- **A lever on prompting, not just the model.** The LLM panel exposes prompt
-  detail (minimal / standard / detailed presets) and free-text operator
-  instructions, so we can see how much of the result is "the model" vs.
-  "how we asked it" — without touching code.
+- **A request shape that matches the real benchmark, not a tutorial.** The
+  default request format mirrors ARC-AGI-3's own reference agent — a
+  minimal "figure out the rules yourself" prompt, screenshots instead of a
+  labeled grid — so failures reflect the model's actual capability, not how
+  generously we explained the mechanics. The whole system/user prompt is
+  also fully visible and editable in the UI, so this is a dial, not a
+  hidden default — see "LLM player panel" below.
 - **Visibility into *why* a move happened.** Every action — human or LLM —
   produces a structured explanation (which attributes matched, what the gap
   to the door still is). For the LLM specifically, its reasoning is shown
@@ -122,18 +126,66 @@ curve; each verified solvable by BFS within its energy budget
 
 ## LLM player panel
 
-- **Prompt detail presets** — `minimal` (bare rules), `standard` (rules +
-  strategy, default), `detailed` (full strategy + edge cases). Changes how
-  much the system prompt tells the model about tactics, not the game rules
-  themselves.
-- **Custom instructions** — free-text box appended to the system prompt as
-  operator guidance (e.g. "prioritize energy pellets over speed"). Persisted
-  in `localStorage`.
+### Request format: matches the reference ARC-AGI-3 agent, on purpose
+
+Early on this used a hand-written text description of the board (tile
+names like `ROTATOR`/`DOOR`, precomputed key/door/gap fields, a rolling
+12-move history). That's a *tutorial*, not a benchmark — it does part of
+the model's reasoning for it and doesn't resemble what a human actually
+perceives (raw pixels, not a labeled JSON dump).
+
+So the default request format now mirrors ARC-AGI-3's own reference agent
+(see [`ARC-AGI-3-Agents/agents/templates/reasoning_agent.py`](https://github.com/arcprize/ARC-AGI-3-Agents/blob/main/agents/templates/reasoning_agent.py)):
+
+- **No rules explained up front.** The default system prompt (`official`
+  preset) only says it's playing a game and should figure out the rules by
+  observing how the game reacts — nothing about what a `ROTATOR` is.
+- **Two screenshots per turn, not a move log.** Each request attaches the
+  *current* board screenshot and the *previous* one (both base64 PNG,
+  captured client-side via `LS20.boardImage()` → `canvas.toDataURL()`), so
+  the model can compare "what changed" — the same single-step lookback the
+  reference agent uses. There's no 12-turn history like before; state
+  beyond one step back isn't given to the model, only to the human-readable
+  log in the UI.
+- **A bare symbol grid alongside the images**, not semantic tile names.
+  `engine.js`'s `observe()` emits a `raw_grid` (one character per cell,
+  arbitrary symbols — `#` wall, `.` floor, `P` player, `R`/`S`/`C` for the
+  changers, etc.) with no legend sent to the model. It has to work out what
+  each symbol does from experimentation, same as the real benchmark.
+- **Multimodal request to Vertex AI**: `_vertex_generate()` sends the
+  screenshots as `inlineData` parts ahead of the text part in the same
+  `generateContent` call — this is what makes it multimodal, not two
+  separate calls.
+
+This is the **"official data format" checkbox** in the LLM panel (on by
+default). Turning it off falls back to the old semantic mode: a
+tile-name grid, precomputed key/door/gap text, no images — pair *that*
+with the `minimal`/`standard`/`detailed` templates below, which name tiles
+by their semantic role and only make sense if the model can actually see
+those names in the grid.
+
+### Prompt controls
+
+- **System prompt — fully editable.** A `<textarea>` holds the exact text
+  sent as the system prompt; nothing is appended behind your back. A
+  "Load" button + dropdown fills it from a starting-point template
+  (`official`, or `minimal`/`standard`/`detailed` for the semantic-grid
+  fallback) fetched from `GET /api/prompt/templates` — loading one doesn't
+  lock you out of editing further.
+- **Worked-example checkbox** — off by default. When checked, the best
+  scoring human run for the current level (mined by `annotate_session.py`
+  into `data/examples.json`) is spliced into the prompt as a solved
+  example. This is real coaching (few-shot from a known-good solution), so
+  it's opt-in, not silently always-on.
 - **Thought log** — the model is asked to reply as `THOUGHT: ...` /
   `ACTION: <word>`; both are parsed server-side (`parse_reply` in
   `server.py`) and the thought is shown per-step in a scrolling log, so
   reasoning stays readable across a whole run instead of being overwritten
   by the next step.
+- **"Last prompt sent"** — a collapsible panel showing the exact
+  system + user text from the most recent call (images are noted as a
+  count, since they can't be shown as text) — full transparency into what
+  the model actually received.
 
 ## Level editor
 
@@ -188,10 +240,11 @@ tells you *why* it failed (e.g. "mismatch on silhouette (shape+rotation)").
 | `GET /api/levels` | list saved level packs |
 | `GET /api/levels/<name>` | fetch a level pack |
 | `GET /api/gemini/status` | check Vertex AI/ADC reachability |
-| `POST /api/gemini/act` `{state, history, preset, custom_instructions, session_id}` | one action + thought from Gemini |
+| `GET /api/prompt/templates` | starting-point system prompts for the UI's editable prompt box |
+| `POST /api/gemini/act` `{state, official, current_image, previous_image, system_prompt, include_example, session_id}` | one action + thought from Gemini |
 | `GET /api/llm/usage[?session_id=]` | token/cost totals for this session |
 | `GET /api/ollama/models` | list local Ollama models |
-| `POST /api/ollama/act` `{model, state, history, preset, custom_instructions}` | one action from a local Ollama model (SSE stream) |
+| `POST /api/ollama/act` `{model, state, official, system_prompt, include_example}` | one action from a local Ollama model (SSE stream, text-only — no image support) |
 
 Browser-side, `window.LS20` exposes `startRun(name, type, model)`, `step(action)`,
 `getState()` — so you can also drive the game from the devtools console or an

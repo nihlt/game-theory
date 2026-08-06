@@ -40,7 +40,7 @@ $("btnExport").onclick = async ()=>{
 };
 
 /* ---------------- Gemini (Vertex AI) LLM player ---------------- */
-const OL = { running:false, history:[], model:null };
+const OL = { running:false, lastImage:null, model:null };
 
 async function checkGeminiStatus(){
   const st = $("olStatus");
@@ -80,6 +80,10 @@ $("olLoadTemplate").onclick = ()=>{
 $("olIncludeExample").checked = localStorage.getItem("ls20.olIncludeExample") === "1";
 $("olIncludeExample").addEventListener("change", ()=>
   localStorage.setItem("ls20.olIncludeExample", $("olIncludeExample").checked ? "1" : "0"));
+
+$("olOfficialFormat").checked = localStorage.getItem("ls20.olOfficialFormat") !== "0"; // default on
+$("olOfficialFormat").addEventListener("change", ()=>
+  localStorage.setItem("ls20.olOfficialFormat", $("olOfficialFormat").checked ? "1" : "0"));
 
 /* ---------------- scrolling thought/action log (chat-style) ---------------- */
 const QUALITY_ICON = {perfect:"🏆", good:"✓", neutral:"·", bad:"⚠", mistake:"✗", wasted:"—"};
@@ -133,7 +137,7 @@ function olLogNoAction(stepNum, thought){
 $("olStart").onclick = async ()=>{
   if(!OL.model){ alert("Vertex AI not ready — check status."); return; }
   if(LS20.isActive()) LS20.abandon();
-  OL.running = true; OL.history = [];
+  OL.running = true; OL.lastImage = null;
   olLogClear();
   $("olStart").disabled = true; $("olStop").disabled = false;
   LS20.startRun(OL.model, "llm", OL.model);
@@ -141,14 +145,20 @@ $("olStart").onclick = async ()=>{
 };
 $("olStop").onclick = ()=>{ OL.running = false; };
 
-/* Ask Gemini (via our /api/gemini/act proxy) for one action.
+/* Ask Gemini (via our /api/gemini/act proxy) for one action. Sends the
+   current + previous screenshots and the raw symbol grid (already part of
+   `state`) — matches the reference ARC-AGI-3 agent's request shape, no
+   multi-step move-log history.
    Resolves with {action, thought, raw, cost_usd}. */
-async function geminiAct(state, history, temperature, sessionId){
+async function geminiAct(state, currentImage, previousImage, temperature, sessionId){
+  const official = $("olOfficialFormat").checked;
   const res = await fetch("/api/gemini/act", {
     method: "POST",
     headers: {"Content-Type": "application/json"},
     body: JSON.stringify({
-      state, history, temperature, session_id: sessionId,
+      state, temperature, session_id: sessionId, official,
+      current_image: official ? currentImage : undefined,
+      previous_image: official ? previousImage : undefined,
       system_prompt: $("olSystemPrompt").value,
       include_example: $("olIncludeExample").checked,
     }),
@@ -156,8 +166,9 @@ async function geminiAct(state, history, temperature, sessionId){
   const data = await res.json();
   if(!res.ok) throw new Error(data.error || "server error");
   if(data.system_prompt_used !== undefined){
+    const imgNote = data.images_attached ? `\n\n[+ ${data.images_attached} image(s) attached]` : "";
     $("olLastPrompt").textContent =
-      "── SYSTEM ──\n" + data.system_prompt_used + "\n\n── USER ──\n" + data.user_prompt_used;
+      "── SYSTEM ──\n" + data.system_prompt_used + "\n\n── USER ──\n" + data.user_prompt_used + imgNote;
   }
   return data;
 }
@@ -170,16 +181,18 @@ async function llmLoop(){
 
   while(OL.running && LS20.isActive() && steps < MAX_STEPS){
     const state = LS20.getState();
+    const currentImage = LS20.boardImage();
     let action = null, thought = "";
     olLogAddThinking(steps);
 
     try{
-      const data = await geminiAct(state, OL.history, temp, sessionId);
+      const data = await geminiAct(state, currentImage, OL.lastImage, temp, sessionId);
       action = data.action; thought = data.thought || (data.raw || "").slice(0, 300);
       refreshUsage();
     }catch(e){
       olLogError(steps, String(e.message || e));
     }
+    OL.lastImage = currentImage;
 
     $("olStatus").textContent = `step ${steps} → ${action || "?"} | failures: ${failures}`;
 
@@ -194,15 +207,6 @@ async function llmLoop(){
       const res = LS20.step(action);
       const quality = res.detail?.action_quality?.quality || "unknown";
       olLogResolve(steps, action, thought, quality);
-      OL.history.push({
-        action,
-        result:  res.result,
-        explain: res.detail?.text              || "",
-        quality,
-        gap:     res.detail?.gap?.total        ?? null,
-        gap_desc:res.detail?.gap?.description  || "",
-      });
-      if(OL.history.length > 12) OL.history.shift();
       if(res.done) break;
     }
     steps++;

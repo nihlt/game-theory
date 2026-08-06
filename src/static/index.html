@@ -54,12 +54,27 @@
         <textarea id="olSystemPrompt" style="min-height:220px; font-family:ui-monospace,Consolas,monospace; font-size:12px;"></textarea>
         <div class="row" style="margin-top:6px">
           <select id="olTemplatePicker" class="grow">
+            <option value="official" selected>Official — no rules given (ARC-AGI-3 style)</option>
             <option value="minimal">Minimal — bare rules</option>
-            <option value="standard" selected>Standard — full rules</option>
+            <option value="standard">Standard — full rules</option>
             <option value="detailed">Detailed — rules + edge cases</option>
           </select>
           <button id="olLoadTemplate" title="overwrite the box above with this template">Load</button>
         </div>
+        <div class="small">
+          The template only changes what you tell the model about the rules up front — from nothing
+          (Official) to fully spelled out (Detailed). What data it receives each turn is controlled
+          separately below.
+        </div>
+      </div>
+      <div class="row">
+        <label class="small" style="margin-top:0">
+          <input type="checkbox" id="olOfficialFormat" checked>
+          official data format — screenshot + previous screenshot + bare symbol grid, no tile names
+          (matches the reference ARC-AGI-3 agent). Unchecked: a semantic tile-name grid, no images —
+          pair this with the Minimal/Standard/Detailed templates, which name tiles like ROTATOR/DOOR
+          that only exist in that semantic grid.
+        </label>
       </div>
       <div class="row">
         <label class="small" style="margin-top:0"><input type="checkbox" id="olIncludeExample"> include a worked example from a successful human run</label>

@@ -387,6 +387,7 @@ function leaderboard(){
 }
 
 /* ---------- observation for LLM harness ---------- */
+const PISTON_CHAR = {UP:"^", DOWN:"v", LEFT:"<", RIGHT:">"};
 function observe(){
   const grid = G.grid.map((row,y)=>row.map((c,x)=>{
     if(G.player.x===x&&G.player.y===y) return "PLAYER";
@@ -394,7 +395,16 @@ function observe(){
     if(G.pistons[x+","+y]) return "PISTON_"+G.pistons[x+","+y];
     return {"#":"WALL",".":"FLOOR"," ":"VOID","D":"DOOR","R":"ROTATOR","S":"SHAPE_CHANGER","C":"COLOR_CHANGER"}[c] || ("PORTAL_"+c.toLowerCase());
   }));
-  return { level:G.li+1, level_name:LEVELS[G.li].name, grid,
+  // raw_grid: same cells, but as bare single-char symbols (no tile names) —
+  // for the "official" LLM harness mode, which gives the model an arbitrary
+  // symbol grid and lets it infer what each symbol does, same as ARC-AGI-3.
+  const raw_grid = G.grid.map((row,y)=>row.map((c,x)=>{
+    if(G.player.x===x&&G.player.y===y) return "P";
+    if(G.pellets.has(x+","+y)) return "E";
+    if(G.pistons[x+","+y]) return PISTON_CHAR[G.pistons[x+","+y]];
+    return c===" " ? "#" : c; // VOID renders identically to WALL — both impassable
+  }).join(""));
+  return { level:G.li+1, level_name:LEVELS[G.li].name, grid, raw_grid,
     player:{...G.player}, key:{...G.key}, door_requirement:{...G.doorReq},
     energy:G.energy, energy_max:G.energyMax,
     n_shapes:N_SHAPES, n_colors:N_COLORS, n_rotations:N_ROTS,
@@ -540,6 +550,7 @@ function loadCustomLevels(levels){
 window.LS20 = {
   startRun, step, reset:manualReset, undo,
   getState:observe,
+  boardImage:()=>cv.toDataURL("image/png"),
   loadCustomLevels,
   sessionId:()=>G.session.session_id,
   nLevels:()=>LEVELS.length,

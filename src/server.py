@@ -264,13 +264,32 @@ Reply in EXACTLY this two-line format (no markdown, no extra lines):
 THOUGHT: <your reasoning, one short sentence>
 ACTION: <ONE WORD: UP, DOWN, LEFT, or RIGHT>"""
 
-# These are *starting points* the operator loads into the fully-editable
-# prompt box in the UI, not fixed behavior — they differ only in how much of
-# the game's mechanics/edge cases they spell out. Deliberately no strategy
-# coaching (no "check the gap, then plan a route" steps): this is a
+# "official" mirrors the reference ARC-AGI-3 agent's approach (see
+# https://github.com/arcprize/ARC-AGI-3-Agents — reasoning_agent.py): a
+# minimal, exploratory instruction with no rules explained up front, paired
+# with a raw symbol grid + current/previous screenshots instead of a
+# semantic tile-name description. This is the default now — the point of
+# the benchmark is to see what the model figures out on its own, not to
+# grade it on following a tutorial we wrote.
+#
+# The other three are *starting points* the operator can load into the
+# fully-editable prompt box instead, for comparison — they differ only in
+# how much of the game's mechanics/edge cases they spell out. Deliberately
+# no strategy coaching (no "check the gap, then plan a route" steps): this is a
 # benchmark of raw play, not a tutorial, so the model gets the rules and the
 # data and is left to figure out tactics itself.
 PROMPT_PRESETS = {
+    "official": """You are playing a video game. Your goal is to win.
+
+You are not told the rules in advance. Explore: take actions, watch how the
+game reacts (what changes on screen, in the grid, in your energy), and use
+what you learn to figure out the rules and reach the goal.
+
+You will be given a raw grid of symbols for the current screen, an image of
+the current screen, and (after your first move) an image of the previous
+screen so you can compare what changed.
+""" + _REPLY_FORMAT,
+
     "minimal": """You play Locksmith, a grid puzzle. Move onto the DOOR to win — it opens
 only when your key's shape/color/rotation all match the door.
 Changers (SHAPE_CHANGER, COLOR_CHANGER, ROTATOR) cycle the matching attribute
@@ -327,7 +346,7 @@ a tile you already used. Attributes wrap around (e.g. shape 3 + 1 → shape 0).
 Every action costs 1 energy; at 0 the level resets (key and pellets restore).
 """ + _REPLY_FORMAT,
 }
-DEFAULT_PRESET = "standard"
+DEFAULT_PRESET = "official"
 
 
 def _compute_gap_server(key: dict, door: dict, n_shapes: int, n_colors: int, n_rots: int) -> dict:
@@ -360,7 +379,7 @@ def _format_history(history: list) -> str:
 
 def _build_messages(model: str, state: dict, history: list,
                     temperature: float, examples: str | None = None,
-                    system_prompt: str | None = None,
+                    system_prompt: str | None = None, official: bool = True,
                     preset: str = DEFAULT_PRESET, custom_instructions: str | None = None) -> dict:
     """Build the {system, user} messages sent to the model.
 
@@ -368,6 +387,14 @@ def _build_messages(model: str, state: dict, history: list,
     path the UI's editable prompt box uses. `preset`/`custom_instructions`
     are a fallback for callers that don't send a full override (e.g. a
     script hitting the API directly).
+
+    `official` picks the *data format*, independent of the prompt text: the
+    bare-symbol `raw_grid` (paired with screenshots, no tile names) when
+    True, or the semantic tile-name grid + key/door/gap restatement when
+    False. `state` always carries `raw_grid` (it's cheap to compute), but it
+    is only used here when `official` is set — the semantic presets name
+    tiles like ROTATOR/DOOR that don't exist in the anonymized grid, so
+    mixing the two would leave the model unable to act on rules it was told.
     """
     if system_prompt is not None:
         sys = system_prompt
@@ -375,6 +402,26 @@ def _build_messages(model: str, state: dict, history: list,
         sys = PROMPT_PRESETS.get(preset, PROMPT_PRESETS[DEFAULT_PRESET])
         if custom_instructions:
             sys += "\n\nOPERATOR INSTRUCTIONS (follow these in addition to the above):\n" + custom_instructions.strip()
+
+    raw_grid = state.get("raw_grid") if official else None
+    if raw_grid is not None:
+        # "official" mode: no tile names, no key/door/gap restatement — just
+        # the bare symbol grid + environment metadata. Whatever the symbols
+        # mean is for the model to work out from how the game reacts, same
+        # as the real game state is opaque to a human until they look at
+        # the (attached) screenshot.
+        user_parts = [
+            f"LEVEL {state['level']}  |  ENERGY {state['energy']}/{state['energy_max']}  |  "
+            f"AVAILABLE ACTIONS: {', '.join(state.get('actions', []))}",
+            "",
+            "RAW GRID (row-major, top-left is (0,0); each character is one cell — "
+            "figure out what each symbol means from how the game responds to your moves):",
+            "\n".join(raw_grid),
+        ]
+        return {"model": model, "stream": True,
+                "messages": [{"role": "system", "content": sys},
+                             {"role": "user",   "content": "\n".join(user_parts)}],
+                "options": {"temperature": temperature}}
 
     ns = state.get("n_shapes", 4)
     nc = state.get("n_colors", 4)
@@ -488,6 +535,7 @@ def ollama_act():
     payload = _build_messages(model, state, history,
                               body.get("temperature", 0.6), examples_str,
                               system_prompt=body.get("system_prompt"),
+                              official=body.get("official", True),
                               preset=body.get("preset", DEFAULT_PRESET),
                               custom_instructions=body.get("custom_instructions"))
 
@@ -614,12 +662,28 @@ def _log_llm_call(*, context: str, session_id: str | None, prompt_tokens: int | 
     return cost_usd
 
 
-def _vertex_generate(system_text: str | None, user_text: str) -> tuple[str, dict]:
-    """Call Vertex AI generateContent. Returns (text, {latency_ms, usage, raw}). Raises on transport/HTTP error."""
+def _strip_data_url(b64: str) -> str:
+    """Strip a 'data:image/png;base64,' prefix if present, else return as-is."""
+    if "," in b64[:40]:
+        return b64.split(",", 1)[1]
+    return b64
+
+
+def _vertex_generate(system_text: str | None, user_text: str,
+                      images: list[str] | None = None) -> tuple[str, dict]:
+    """Call Vertex AI generateContent. Returns (text, {latency_ms, usage, raw}). Raises on transport/HTTP error.
+
+    `images`, if given, are base64 PNG strings (with or without a data-URL
+    prefix) sent as inline image parts ahead of the text — this is how the
+    "official" ARC-AGI-3-style mode attaches the current/previous screenshot.
+    """
     token = _get_gcp_token()
     url = (f"https://{GCP_LOCATION}-aiplatform.googleapis.com/v1/projects/{GCP_PROJECT}"
            f"/locations/{GCP_LOCATION}/publishers/google/models/{GEMINI_MODEL}:generateContent")
-    payload = {"contents": [{"role": "user", "parts": [{"text": user_text}]}]}
+    parts = [{"inlineData": {"mimeType": "image/png", "data": _strip_data_url(img)}}
+             for img in (images or [])]
+    parts.append({"text": user_text})
+    payload = {"contents": [{"role": "user", "parts": parts}]}
     if system_text:
         payload["systemInstruction"] = {"parts": [{"text": system_text}]}
 
@@ -682,9 +746,10 @@ def gemini_generate():
 def gemini_act():
     """One game action from Gemini — replaces the Ollama /api/ollama/act path.
 
-    Reuses the same prompt-building logic (gap computation, grid rendering,
-    history, worked examples) as the Ollama path, just sent to Vertex AI
-    instead of a local Ollama server. Every call is logged with tokens/cost.
+    In the default "official" mode, `state` carries a `raw_grid` (bare
+    symbols, no tile names) and the request also attaches `current_image` /
+    `previous_image` (base64 PNG screenshots) so the request matches the
+    reference ARC-AGI-3 agent's format. Every call is logged with tokens/cost.
     """
     if not GCP_PROJECT:
         return jsonify(error="GOOGLE_CLOUD_PROJECT not set in .env"), 400
@@ -695,17 +760,20 @@ def gemini_act():
     history = body.get("history", [])
     session_id = body.get("session_id")
 
+    official = body.get("official", True)
     examples_str = _pick_example(state.get("level", 1)) if body.get("include_example") else None
     msg_payload = _build_messages(GEMINI_MODEL, state, history,
                                    body.get("temperature", 0.6), examples_str,
-                                   system_prompt=body.get("system_prompt"),
+                                   system_prompt=body.get("system_prompt"), official=official,
                                    preset=body.get("preset", DEFAULT_PRESET),
                                    custom_instructions=body.get("custom_instructions"))
     sys_text = msg_payload["messages"][0]["content"]
     user_text = msg_payload["messages"][1]["content"]
 
+    images = [img for img in (body.get("current_image"), body.get("previous_image")) if img] if official else []
+
     try:
-        text, meta = _vertex_generate(sys_text, user_text)
+        text, meta = _vertex_generate(sys_text, user_text, images or None)
     except DefaultCredentialsError as e:
         return jsonify(error=f"ADC not configured: {e}"), 500
     except requests.HTTPError as e:
@@ -728,7 +796,8 @@ def gemini_act():
 
     return jsonify(action=action, thought=thought, raw=text.strip()[:800],
                     latency_ms=meta["latency_ms"], cost_usd=cost_usd, usage=usage,
-                    system_prompt_used=sys_text, user_prompt_used=user_text)
+                    system_prompt_used=sys_text, user_prompt_used=user_text,
+                    images_attached=len(images))
 
 
 @app.get("/api/llm/usage")
