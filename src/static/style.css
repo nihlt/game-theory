@@ -40,6 +40,15 @@
   .tag.human{background:#1c3428; color:var(--good);} .tag.llm{background:#3a1f22; color:var(--bad);}
   #log{height:130px; overflow-y:auto; background:var(--void); border:1px solid var(--line); border-radius:6px; padding:8px; font-size:11px; color:var(--dim); line-height:1.6; font-family:ui-monospace,Consolas,monospace; margin-top:12px;}
   #log .ev{color:var(--accent2);} #log .win{color:var(--good);} #log .die{color:var(--bad);}
+
+  .llmlog{height:280px; overflow-y:auto; background:var(--void); border:1px solid var(--line); border-radius:6px; padding:10px; display:flex; flex-direction:column; gap:10px;}
+  .llmlog .empty{color:var(--dim); text-align:center; margin:auto;}
+  .llmlog .entry{padding-bottom:8px; border-bottom:1px solid var(--line);}
+  .llmlog .entry:last-child{border-bottom:none; padding-bottom:0;}
+  .llmlog .entry .act{font-family:ui-monospace,Consolas,monospace; font-weight:600; color:var(--accent); font-size:12px;}
+  .llmlog .entry .thought{color:var(--dim); font-size:12px; margin-top:3px; line-height:1.5;}
+  .llmlog .entry.thinking .thought{color:var(--accent2); font-style:italic;}
+  .llmlog .entry.error .thought{color:var(--bad);}
   .manual{font-size:13px; line-height:1.65; color:var(--dim);}
   .manual b{color:var(--ink); font-weight:600;}
   .manual .k{color:var(--accent);}

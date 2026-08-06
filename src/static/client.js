@@ -59,15 +59,67 @@ $("olRefresh").onclick = checkGeminiStatus;
 $("olDelay").oninput = ()=> $("olDelayVal").textContent = $("olDelay").value;
 
 /* persist preset + custom instructions across reloads */
+const DEFAULT_CUSTOM_INSTRUCTIONS =
+  "Think briefly, then commit. Avoid revisiting a changer tile unless it still moves you toward the gap.";
 $("olPreset").value = localStorage.getItem("ls20.olPreset") || "standard";
-$("olCustomInstructions").value = localStorage.getItem("ls20.olCustomInstructions") || "";
+$("olCustomInstructions").value = localStorage.getItem("ls20.olCustomInstructions") ?? DEFAULT_CUSTOM_INSTRUCTIONS;
 $("olPreset").addEventListener("change", ()=> localStorage.setItem("ls20.olPreset", $("olPreset").value));
 $("olCustomInstructions").addEventListener("input", ()=> localStorage.setItem("ls20.olCustomInstructions", $("olCustomInstructions").value));
+
+/* ---------------- scrolling thought/action log (chat-style) ---------------- */
+const QUALITY_ICON = {perfect:"🏆", good:"✓", neutral:"·", bad:"⚠", mistake:"✗", wasted:"—"};
+
+function olLogClear(){
+  $("olLog").innerHTML = '<div class="empty small">Thoughts and moves will appear here once a run starts.</div>';
+}
+function olLogScrollBottom(){
+  const el = $("olLog");
+  el.scrollTop = el.scrollHeight;
+}
+function olLogAddThinking(stepNum){
+  const log = $("olLog");
+  const empty = log.querySelector(".empty");
+  if(empty) empty.remove();
+  const div = document.createElement("div");
+  div.className = "entry thinking";
+  div.id = "olLogPending";
+  div.innerHTML = `<div class="thought">⌛ step ${stepNum}: thinking…</div>`;
+  log.appendChild(div);
+  olLogScrollBottom();
+}
+function olLogResolve(stepNum, action, thought, quality){
+  const div = $("olLogPending") || document.createElement("div");
+  div.removeAttribute("id");
+  div.className = "entry";
+  const icon = QUALITY_ICON[quality] || "";
+  div.innerHTML = `<div class="act">#${stepNum} ${action || "?"} ${icon}</div>` +
+    (thought ? `<div class="thought">${escapeHtml(thought)}</div>` : "");
+  if(!div.parentNode) $("olLog").appendChild(div);
+  olLogScrollBottom();
+}
+function olLogError(stepNum, message){
+  const div = $("olLogPending") || document.createElement("div");
+  div.removeAttribute("id");
+  div.className = "entry error";
+  div.innerHTML = `<div class="thought">step ${stepNum} error: ${escapeHtml(message.slice(0, 200))}</div>`;
+  if(!div.parentNode) $("olLog").appendChild(div);
+  olLogScrollBottom();
+}
+function olLogNoAction(stepNum, thought){
+  const div = $("olLogPending");
+  if(!div) return;
+  div.removeAttribute("id");
+  div.className = "entry error";
+  div.innerHTML = `<div class="act">#${stepNum} no valid action</div>` +
+    (thought ? `<div class="thought">${escapeHtml(thought)}</div>` : "");
+  olLogScrollBottom();
+}
 
 $("olStart").onclick = async ()=>{
   if(!OL.model){ alert("Vertex AI not ready — check status."); return; }
   if(LS20.isActive()) LS20.abandon();
   OL.running = true; OL.history = [];
+  olLogClear();
   $("olStart").disabled = true; $("olStop").disabled = false;
   LS20.startRun(OL.model, "llm", OL.model);
   llmLoop();
@@ -77,8 +129,6 @@ $("olStop").onclick = ()=>{ OL.running = false; };
 /* Ask Gemini (via our /api/gemini/act proxy) for one action.
    Resolves with {action, thought, raw, cost_usd}. */
 async function geminiAct(state, history, temperature, sessionId){
-  const thoughtEl = $("olThought");
-  thoughtEl.textContent = "⌛ thinking…";
   const res = await fetch("/api/gemini/act", {
     method: "POST",
     headers: {"Content-Type": "application/json"},
@@ -90,7 +140,6 @@ async function geminiAct(state, history, temperature, sessionId){
   });
   const data = await res.json();
   if(!res.ok) throw new Error(data.error || "server error");
-  thoughtEl.textContent = data.thought || (data.raw || "").slice(0, 300);
   return data;
 }
 
@@ -102,20 +151,21 @@ async function llmLoop(){
 
   while(OL.running && LS20.isActive() && steps < MAX_STEPS){
     const state = LS20.getState();
-    let action = null, raw = "";
+    let action = null, thought = "";
+    olLogAddThinking(steps);
 
     try{
       const data = await geminiAct(state, OL.history, temp, sessionId);
-      action = data.action; raw = data.raw;
+      action = data.action; thought = data.thought || (data.raw || "").slice(0, 300);
       refreshUsage();
     }catch(e){
-      raw = String(e);
-      $("olThought").textContent = "error: " + raw.slice(0, 200);
+      olLogError(steps, String(e.message || e));
     }
 
     $("olStatus").textContent = `step ${steps} → ${action || "?"} | failures: ${failures}`;
 
     if(!action){
+      olLogNoAction(steps, thought);
       if(++failures >= 5){
         $("olStatus").textContent = "LLM run stopped: 5 bad replies in a row.";
         break;
@@ -123,11 +173,13 @@ async function llmLoop(){
     } else {
       failures = 0;
       const res = LS20.step(action);
+      const quality = res.detail?.action_quality?.quality || "unknown";
+      olLogResolve(steps, action, thought, quality);
       OL.history.push({
         action,
         result:  res.result,
         explain: res.detail?.text              || "",
-        quality: res.detail?.action_quality?.quality || "unknown",
+        quality,
         gap:     res.detail?.gap?.total        ?? null,
         gap_desc:res.detail?.gap?.description  || "",
       });
