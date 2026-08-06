@@ -58,6 +58,12 @@ async function checkGeminiStatus(){
 $("olRefresh").onclick = checkGeminiStatus;
 $("olDelay").oninput = ()=> $("olDelayVal").textContent = $("olDelay").value;
 
+/* persist preset + custom instructions across reloads */
+$("olPreset").value = localStorage.getItem("ls20.olPreset") || "standard";
+$("olCustomInstructions").value = localStorage.getItem("ls20.olCustomInstructions") || "";
+$("olPreset").addEventListener("change", ()=> localStorage.setItem("ls20.olPreset", $("olPreset").value));
+$("olCustomInstructions").addEventListener("input", ()=> localStorage.setItem("ls20.olCustomInstructions", $("olCustomInstructions").value));
+
 $("olStart").onclick = async ()=>{
   if(!OL.model){ alert("Vertex AI not ready — check status."); return; }
   if(LS20.isActive()) LS20.abandon();
@@ -69,18 +75,22 @@ $("olStart").onclick = async ()=>{
 $("olStop").onclick = ()=>{ OL.running = false; };
 
 /* Ask Gemini (via our /api/gemini/act proxy) for one action.
-   Resolves with {action, raw, cost_usd}. */
+   Resolves with {action, thought, raw, cost_usd}. */
 async function geminiAct(state, history, temperature, sessionId){
-  const thought = $("olThought");
-  thought.textContent = "⌛ thinking…";
+  const thoughtEl = $("olThought");
+  thoughtEl.textContent = "⌛ thinking…";
   const res = await fetch("/api/gemini/act", {
     method: "POST",
     headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({state, history, temperature, session_id: sessionId}),
+    body: JSON.stringify({
+      state, history, temperature, session_id: sessionId,
+      preset: $("olPreset").value,
+      custom_instructions: $("olCustomInstructions").value.trim() || undefined,
+    }),
   });
   const data = await res.json();
   if(!res.ok) throw new Error(data.error || "server error");
-  thought.textContent = (data.raw || "").slice(0, 200);
+  thoughtEl.textContent = data.thought || (data.raw || "").slice(0, 300);
   return data;
 }
 

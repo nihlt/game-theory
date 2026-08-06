@@ -258,8 +258,20 @@ def get_levels(name: str):
     return jsonify(json.loads(p.read_text()))
 
 
-# ---------------------------------------------------------------- Ollama
-SYSTEM_PROMPT = """You are playing a grid puzzle game called Locksmith (ARC-AGI-3 ls20 replica).
+# ---------------------------------------------------------------- prompt presets
+_REPLY_FORMAT = """
+Reply in EXACTLY this two-line format (no markdown, no extra lines):
+THOUGHT: <your reasoning, one short sentence>
+ACTION: <ONE WORD: UP, DOWN, LEFT, or RIGHT>"""
+
+PROMPT_PRESETS = {
+    "minimal": """You play Locksmith, a grid puzzle. Move onto the DOOR to win — it opens
+only when your key's shape/color/rotation all match the door.
+Changers (SHAPE_CHANGER, COLOR_CHANGER, ROTATOR) cycle the matching attribute
+by 1 each time you step on them. Check GAP for what's left to change.
+""" + _REPLY_FORMAT,
+
+    "standard": """You are playing a grid puzzle game called Locksmith (ARC-AGI-3 ls20 replica).
 
 OBJECTIVE: move your PLAYER onto the DOOR tile.
 The door only opens when all three key attributes match the door requirement:
@@ -286,8 +298,51 @@ STRATEGY:
 2. Plan the route to the required changers in order.
 3. Only approach the DOOR when gap = 0 (all attributes match).
 4. Watch your energy — collect PELLETS if running low.
+""" + _REPLY_FORMAT,
 
-Reply with EXACTLY ONE WORD: UP, DOWN, LEFT, or RIGHT."""
+    "detailed": """You are playing a grid puzzle game called Locksmith (ARC-AGI-3 ls20 replica).
+
+OBJECTIVE: move your PLAYER onto the DOOR tile.
+The door only opens when all three key attributes match the door requirement:
+  • shape   (0-{n_shapes_m1}, cycles with SHAPE_CHANGER)
+  • color   (0-{n_colors_m1}, cycles with COLOR_CHANGER)
+  • rotation(0-{n_rots_m1} = 0°/90°/180°/270°, cycles with ROTATOR)
+
+TILE GUIDE:
+  FLOOR         — passable, nothing happens
+  WALL          — impassable, do not try to enter
+  ROTATOR       — entering adds 1 to rotation (cycles 0→1→2→3→0)
+  SHAPE_CHANGER — entering adds 1 to shape
+  COLOR_CHANGER — entering adds 1 to color
+  PELLET        — collecting refills energy to max (single-use)
+  PISTON_<DIR>  — shoves you in that direction until a wall, possibly crossing
+                  several tiles and re-triggering changers along the way
+  PORTAL_a/b    — teleports to the partner portal of the same letter; the exit
+                  tile matters, plan your next step from there, not from where
+                  you entered
+  DOOR          — only opens if ALL attributes (shape, color, rotation) match
+                  the requirement simultaneously; a partial match does nothing
+
+KEY RULE: changers trigger every time you step ON them, including re-entering
+a tile you already used. Step off and back on to cycle an attribute again.
+Attributes wrap around (e.g. shape 3 + 1 → shape 0).
+
+STRATEGY (think through all of this before answering):
+1. Read GAP carefully — it tells you exactly which attributes are off and how
+   many changer visits each still needs.
+2. Locate the nearest changer(s) that fix the largest remaining gap first,
+   but avoid routes that pass through the WRONG changer and re-break an
+   attribute you already fixed.
+3. Sequence your route so you touch each needed changer the right number of
+   times, then head to the door only once GAP total is 0.
+4. Track energy: if a detour to a PELLET costs less than the risk of running
+   out mid-route, take it. Running out resets the whole level.
+5. Use RECENT MOVES and the quality/gap annotations to detect if a previous
+   move was wasted (e.g. re-triggering a changer you didn't need to) and
+   correct course rather than repeating the mistake.
+""" + _REPLY_FORMAT,
+}
+DEFAULT_PRESET = "standard"
 
 
 def _compute_gap_server(key: dict, door: dict, n_shapes: int, n_colors: int, n_rots: int) -> dict:
@@ -319,12 +374,16 @@ def _format_history(history: list) -> str:
 
 
 def _build_messages(model: str, state: dict, history: list,
-                    temperature: float, examples: str | None = None) -> dict:
+                    temperature: float, examples: str | None = None,
+                    preset: str = DEFAULT_PRESET, custom_instructions: str | None = None) -> dict:
     ns = state.get("n_shapes", 4)
     nc = state.get("n_colors", 4)
     nr = state.get("n_rotations", 4)
 
-    sys = SYSTEM_PROMPT.format(n_shapes_m1=ns-1, n_colors_m1=nc-1, n_rots_m1=nr-1)
+    template = PROMPT_PRESETS.get(preset, PROMPT_PRESETS[DEFAULT_PRESET])
+    sys = template.format(n_shapes_m1=ns-1, n_colors_m1=nc-1, n_rots_m1=nr-1)
+    if custom_instructions:
+        sys += "\n\nOPERATOR INSTRUCTIONS (follow these in addition to the above):\n" + custom_instructions.strip()
 
     key  = state["key"]
     door = state["door_requirement"]
@@ -360,7 +419,7 @@ def _build_messages(model: str, state: dict, history: list,
     else:
         user_parts += ["", f"⚑  You still need {gap['total']} changer visit(s) before attempting the door."]
 
-    user_parts.append("\nYour move (ONE WORD):")
+    user_parts.append("\nYour move:")
 
     return {"model": model, "stream": True,
             "messages": [{"role": "system", "content": sys},
@@ -379,13 +438,28 @@ def ollama_models():
         return jsonify(ok=False, error=f"Ollama unreachable at {OLLAMA_URL}: {e}"), 502
 
 
+_examples_cache: dict = {"mtime": None, "data": {}}
+
+
 def _load_examples() -> dict:
-    """Load data/examples.json generated by annotate_session.py (best-effort)."""
+    """Load data/examples.json generated by annotate_session.py (best-effort).
+
+    Cached in memory keyed on the file's mtime — this is read on every
+    ollama/gemini act call and the file can be tens of MB, so re-parsing it
+    per request would dominate request latency.
+    """
     p = DATA_DIR / "examples.json"
     try:
-        return json.loads(p.read_text()) if p.exists() else {}
-    except (OSError, json.JSONDecodeError):
-        return {}
+        mtime = p.stat().st_mtime if p.exists() else None
+    except OSError:
+        mtime = None
+    if mtime != _examples_cache["mtime"]:
+        try:
+            _examples_cache["data"] = json.loads(p.read_text()) if mtime is not None else {}
+        except (OSError, json.JSONDecodeError):
+            _examples_cache["data"] = {}
+        _examples_cache["mtime"] = mtime
+    return _examples_cache["data"]
 
 
 def _pick_example(level: int) -> str | None:
@@ -411,7 +485,9 @@ def ollama_act():
 
     examples_str = _pick_example(state.get("level", 1))
     payload = _build_messages(model, state, history,
-                              body.get("temperature", 0.6), examples_str)
+                              body.get("temperature", 0.6), examples_str,
+                              preset=body.get("preset", DEFAULT_PRESET),
+                              custom_instructions=body.get("custom_instructions"))
 
     def generate():
         raw = ""
@@ -435,19 +511,37 @@ def ollama_act():
         except requests.RequestException as e:
             yield f"data: {json.dumps({'error': str(e)})}\n\n"
             return
-        action = parse_action(raw)
-        yield f"data: {json.dumps({'done': True, 'action': action, 'raw': raw.strip()[:800]})}\n\n"
+        action, thought = parse_reply(raw)
+        yield f"data: {json.dumps({'done': True, 'action': action, 'thought': thought, 'raw': raw.strip()[:800]})}\n\n"
 
     return app.response_class(generate(), mimetype="text/event-stream",
                               headers={"Cache-Control": "no-cache",
                                        "X-Accel-Buffering": "no"})
 
 
+def parse_reply(raw: str) -> tuple[str | None, str]:
+    """Split a model reply into (action, thought).
+
+    Prefers the structured "ACTION: <word>" / "THOUGHT: ..." format we ask
+    for in the prompt presets; falls back to scanning for a bare direction
+    word so older/uncooperative models still work.
+    """
+    cleaned = re.sub(r"<think>.*?</think>", "", raw, flags=re.S)
+
+    thought_m = re.search(r"THOUGHT:\s*(.+)", cleaned, flags=re.I)
+    thought = thought_m.group(1).strip() if thought_m else ""
+
+    action_m = re.search(r"ACTION:\s*\b(UP|DOWN|LEFT|RIGHT)\b", cleaned, flags=re.I)
+    if action_m:
+        return action_m.group(1).upper(), thought
+
+    matches = re.findall(r"\b(UP|DOWN|LEFT|RIGHT)\b", cleaned.upper())
+    return (matches[-1] if matches else None), thought
+
+
 def parse_action(raw: str) -> str | None:
-    """Extract one of the four actions from arbitrary model output."""
-    text = re.sub(r"<think>.*?</think>", "", raw, flags=re.S).upper()
-    matches = re.findall(r"\b(UP|DOWN|LEFT|RIGHT)\b", text)
-    return matches[-1] if matches else None
+    """Back-compat wrapper — action only, no thought."""
+    return parse_reply(raw)[0]
 
 
 # --------------------------------------------------------------- Vertex AI
@@ -601,7 +695,9 @@ def gemini_act():
 
     examples_str = _pick_example(state.get("level", 1))
     msg_payload = _build_messages(GEMINI_MODEL, state, history,
-                                   body.get("temperature", 0.6), examples_str)
+                                   body.get("temperature", 0.6), examples_str,
+                                   preset=body.get("preset", DEFAULT_PRESET),
+                                   custom_instructions=body.get("custom_instructions"))
     sys_text = msg_payload["messages"][0]["content"]
     user_text = msg_payload["messages"][1]["content"]
 
@@ -620,15 +716,15 @@ def gemini_act():
                        status="error", error=str(e))
         return jsonify(error=f"Vertex AI unreachable: {e}"), 502
 
-    action = parse_action(text)
+    action, thought = parse_reply(text)
     usage = meta["usage"]
     cost_usd = _log_llm_call(context="game", session_id=session_id,
                               prompt_tokens=usage.get("promptTokenCount"),
                               response_tokens=usage.get("candidatesTokenCount"),
                               latency_ms=meta["latency_ms"], action=action, status="ok")
 
-    return jsonify(action=action, raw=text.strip()[:800], latency_ms=meta["latency_ms"],
-                    cost_usd=cost_usd, usage=usage)
+    return jsonify(action=action, thought=thought, raw=text.strip()[:800],
+                    latency_ms=meta["latency_ms"], cost_usd=cost_usd, usage=usage)
 
 
 @app.get("/api/llm/usage")

@@ -48,12 +48,25 @@
         <label class="small" style="margin:0">delay <span id="olDelayVal">400</span>ms</label>
         <input id="olDelay" type="range" min="0" max="2000" step="100" value="400" style="flex:1">
       </div>
+      <div style="margin-top:8px">
+        <label class="small" style="margin:0 0 4px;display:block">prompt detail</label>
+        <select id="olPreset" style="width:100%">
+          <option value="minimal">Minimal — bare rules, terse</option>
+          <option value="standard" selected>Standard — rules + strategy</option>
+          <option value="detailed">Detailed — full strategy + caveats</option>
+        </select>
+      </div>
+      <div style="margin-top:8px">
+        <label class="small" style="margin:0 0 4px;display:block">custom instructions (optional)</label>
+        <textarea id="olCustomInstructions" placeholder="e.g. Prioritize energy pellets over speed. Avoid revisiting the same tile twice in a row."
+          style="width:100%;min-height:56px;resize:vertical;font:inherit;background:var(--void);color:inherit;border:1px solid var(--line);border-radius:6px;padding:6px"></textarea>
+      </div>
       <div style="display:flex;gap:8px;margin-top:10px">
         <button id="olStart" class="primary" style="flex:1">▶ LLM RUN</button>
         <button id="olStop" disabled style="flex:1">■ STOP</button>
       </div>
       <div class="small" id="olStatus">Vertex AI status: checking…</div>
-      <div class="small" id="olThought" style="max-height:64px;overflow:hidden;color:var(--accent2)"></div>
+      <div class="small" id="olThought" style="max-height:120px;overflow:auto;color:var(--accent2);white-space:pre-wrap"></div>
       <div class="small" id="olUsage" style="margin-top:6px;color:var(--accent2)">0 calls · 0 tokens · $0.0000</div>
     </div>
 
