@@ -264,20 +264,26 @@ Reply in EXACTLY this two-line format (no markdown, no extra lines):
 THOUGHT: <your reasoning, one short sentence>
 ACTION: <ONE WORD: UP, DOWN, LEFT, or RIGHT>"""
 
+# These are *starting points* the operator loads into the fully-editable
+# prompt box in the UI, not fixed behavior — they differ only in how much of
+# the game's mechanics/edge cases they spell out. Deliberately no strategy
+# coaching (no "check the gap, then plan a route" steps): this is a
+# benchmark of raw play, not a tutorial, so the model gets the rules and the
+# data and is left to figure out tactics itself.
 PROMPT_PRESETS = {
     "minimal": """You play Locksmith, a grid puzzle. Move onto the DOOR to win — it opens
 only when your key's shape/color/rotation all match the door.
 Changers (SHAPE_CHANGER, COLOR_CHANGER, ROTATOR) cycle the matching attribute
-by 1 each time you step on them. Check GAP for what's left to change.
+by 1 each time you step on them.
 """ + _REPLY_FORMAT,
 
     "standard": """You are playing a grid puzzle game called Locksmith (ARC-AGI-3 ls20 replica).
 
 OBJECTIVE: move your PLAYER onto the DOOR tile.
 The door only opens when all three key attributes match the door requirement:
-  • shape   (0-{n_shapes_m1}, cycles with SHAPE_CHANGER)
-  • color   (0-{n_colors_m1}, cycles with COLOR_CHANGER)
-  • rotation(0-{n_rots_m1} = 0°/90°/180°/270°, cycles with ROTATOR)
+  • shape    (0-3, cycles with SHAPE_CHANGER)
+  • color    (0-3, cycles with COLOR_CHANGER)
+  • rotation (0-3 = 0°/90°/180°/270°, cycles with ROTATOR)
 
 TILE GUIDE:
   FLOOR         — passable, nothing happens
@@ -291,22 +297,16 @@ TILE GUIDE:
   DOOR          — only opens if ALL attributes match requirement
 
 KEY RULE: changers trigger every time you step ON them.
-Step off, step back = cycle again. Use this to reach any target value.
-
-STRATEGY:
-1. Check GAP — which attributes still need to change and by how many visits.
-2. Plan the route to the required changers in order.
-3. Only approach the DOOR when gap = 0 (all attributes match).
-4. Watch your energy — collect PELLETS if running low.
+Attributes wrap around (e.g. shape 3 + 1 → shape 0).
 """ + _REPLY_FORMAT,
 
     "detailed": """You are playing a grid puzzle game called Locksmith (ARC-AGI-3 ls20 replica).
 
 OBJECTIVE: move your PLAYER onto the DOOR tile.
 The door only opens when all three key attributes match the door requirement:
-  • shape   (0-{n_shapes_m1}, cycles with SHAPE_CHANGER)
-  • color   (0-{n_colors_m1}, cycles with COLOR_CHANGER)
-  • rotation(0-{n_rots_m1} = 0°/90°/180°/270°, cycles with ROTATOR)
+  • shape    (0-3, cycles with SHAPE_CHANGER)
+  • color    (0-3, cycles with COLOR_CHANGER)
+  • rotation (0-3 = 0°/90°/180°/270°, cycles with ROTATOR)
 
 TILE GUIDE:
   FLOOR         — passable, nothing happens
@@ -318,28 +318,13 @@ TILE GUIDE:
   PISTON_<DIR>  — shoves you in that direction until a wall, possibly crossing
                   several tiles and re-triggering changers along the way
   PORTAL_a/b    — teleports to the partner portal of the same letter; the exit
-                  tile matters, plan your next step from there, not from where
-                  you entered
+                  tile is your new position
   DOOR          — only opens if ALL attributes (shape, color, rotation) match
                   the requirement simultaneously; a partial match does nothing
 
 KEY RULE: changers trigger every time you step ON them, including re-entering
-a tile you already used. Step off and back on to cycle an attribute again.
-Attributes wrap around (e.g. shape 3 + 1 → shape 0).
-
-STRATEGY (think through all of this before answering):
-1. Read GAP carefully — it tells you exactly which attributes are off and how
-   many changer visits each still needs.
-2. Locate the nearest changer(s) that fix the largest remaining gap first,
-   but avoid routes that pass through the WRONG changer and re-break an
-   attribute you already fixed.
-3. Sequence your route so you touch each needed changer the right number of
-   times, then head to the door only once GAP total is 0.
-4. Track energy: if a detour to a PELLET costs less than the risk of running
-   out mid-route, take it. Running out resets the whole level.
-5. Use RECENT MOVES and the quality/gap annotations to detect if a previous
-   move was wasted (e.g. re-triggering a changer you didn't need to) and
-   correct course rather than repeating the mistake.
+a tile you already used. Attributes wrap around (e.g. shape 3 + 1 → shape 0).
+Every action costs 1 energy; at 0 the level resets (key and pellets restore).
 """ + _REPLY_FORMAT,
 }
 DEFAULT_PRESET = "standard"
@@ -375,15 +360,25 @@ def _format_history(history: list) -> str:
 
 def _build_messages(model: str, state: dict, history: list,
                     temperature: float, examples: str | None = None,
+                    system_prompt: str | None = None,
                     preset: str = DEFAULT_PRESET, custom_instructions: str | None = None) -> dict:
+    """Build the {system, user} messages sent to the model.
+
+    `system_prompt`, if given, is used verbatim — this is the full-control
+    path the UI's editable prompt box uses. `preset`/`custom_instructions`
+    are a fallback for callers that don't send a full override (e.g. a
+    script hitting the API directly).
+    """
+    if system_prompt is not None:
+        sys = system_prompt
+    else:
+        sys = PROMPT_PRESETS.get(preset, PROMPT_PRESETS[DEFAULT_PRESET])
+        if custom_instructions:
+            sys += "\n\nOPERATOR INSTRUCTIONS (follow these in addition to the above):\n" + custom_instructions.strip()
+
     ns = state.get("n_shapes", 4)
     nc = state.get("n_colors", 4)
     nr = state.get("n_rotations", 4)
-
-    template = PROMPT_PRESETS.get(preset, PROMPT_PRESETS[DEFAULT_PRESET])
-    sys = template.format(n_shapes_m1=ns-1, n_colors_m1=nc-1, n_rots_m1=nr-1)
-    if custom_instructions:
-        sys += "\n\nOPERATOR INSTRUCTIONS (follow these in addition to the above):\n" + custom_instructions.strip()
 
     key  = state["key"]
     door = state["door_requirement"]
@@ -473,6 +468,12 @@ def _pick_example(level: int) -> str | None:
     return best["prompt_text"] if best else None
 
 
+@app.get("/api/prompt/templates")
+def prompt_templates():
+    """Starting-point system prompts the UI's prompt box can load, plus which is default."""
+    return jsonify(templates=PROMPT_PRESETS, default=DEFAULT_PRESET)
+
+
 @app.post("/api/ollama/act")
 def ollama_act():
     """Stream the model's reply, emit SSE events, close with {action, raw}."""
@@ -483,9 +484,10 @@ def ollama_act():
     if not model or not state:
         return jsonify(error="model and state required"), 400
 
-    examples_str = _pick_example(state.get("level", 1))
+    examples_str = _pick_example(state.get("level", 1)) if body.get("include_example") else None
     payload = _build_messages(model, state, history,
                               body.get("temperature", 0.6), examples_str,
+                              system_prompt=body.get("system_prompt"),
                               preset=body.get("preset", DEFAULT_PRESET),
                               custom_instructions=body.get("custom_instructions"))
 
@@ -693,9 +695,10 @@ def gemini_act():
     history = body.get("history", [])
     session_id = body.get("session_id")
 
-    examples_str = _pick_example(state.get("level", 1))
+    examples_str = _pick_example(state.get("level", 1)) if body.get("include_example") else None
     msg_payload = _build_messages(GEMINI_MODEL, state, history,
                                    body.get("temperature", 0.6), examples_str,
+                                   system_prompt=body.get("system_prompt"),
                                    preset=body.get("preset", DEFAULT_PRESET),
                                    custom_instructions=body.get("custom_instructions"))
     sys_text = msg_payload["messages"][0]["content"]
@@ -724,7 +727,8 @@ def gemini_act():
                               latency_ms=meta["latency_ms"], action=action, status="ok")
 
     return jsonify(action=action, thought=thought, raw=text.strip()[:800],
-                    latency_ms=meta["latency_ms"], cost_usd=cost_usd, usage=usage)
+                    latency_ms=meta["latency_ms"], cost_usd=cost_usd, usage=usage,
+                    system_prompt_used=sys_text, user_prompt_used=user_text)
 
 
 @app.get("/api/llm/usage")

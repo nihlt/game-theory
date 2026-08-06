@@ -58,13 +58,28 @@ async function checkGeminiStatus(){
 $("olRefresh").onclick = checkGeminiStatus;
 $("olDelay").oninput = ()=> $("olDelayVal").textContent = $("olDelay").value;
 
-/* persist preset + custom instructions across reloads */
-const DEFAULT_CUSTOM_INSTRUCTIONS =
-  "Think briefly, then commit. Avoid revisiting a changer tile unless it still moves you toward the gap.";
-$("olPreset").value = localStorage.getItem("ls20.olPreset") || "standard";
-$("olCustomInstructions").value = localStorage.getItem("ls20.olCustomInstructions") ?? DEFAULT_CUSTOM_INSTRUCTIONS;
-$("olPreset").addEventListener("change", ()=> localStorage.setItem("ls20.olPreset", $("olPreset").value));
-$("olCustomInstructions").addEventListener("input", ()=> localStorage.setItem("ls20.olCustomInstructions", $("olCustomInstructions").value));
+/* ---------------- fully-editable system prompt ---------------- */
+let PROMPT_TEMPLATES = {};
+
+async function loadPromptTemplates(){
+  try{
+    const r = await (await fetch("/api/prompt/templates")).json();
+    PROMPT_TEMPLATES = r.templates || {};
+    const saved = localStorage.getItem("ls20.olSystemPrompt");
+    $("olSystemPrompt").value = saved || PROMPT_TEMPLATES[r.default] || "";
+  }catch(e){ console.warn("prompt templates fetch failed", e); }
+}
+$("olSystemPrompt").addEventListener("input", ()=> localStorage.setItem("ls20.olSystemPrompt", $("olSystemPrompt").value));
+$("olLoadTemplate").onclick = ()=>{
+  const key = $("olTemplatePicker").value;
+  if(!PROMPT_TEMPLATES[key]) return;
+  $("olSystemPrompt").value = PROMPT_TEMPLATES[key];
+  localStorage.setItem("ls20.olSystemPrompt", PROMPT_TEMPLATES[key]);
+};
+
+$("olIncludeExample").checked = localStorage.getItem("ls20.olIncludeExample") === "1";
+$("olIncludeExample").addEventListener("change", ()=>
+  localStorage.setItem("ls20.olIncludeExample", $("olIncludeExample").checked ? "1" : "0"));
 
 /* ---------------- scrolling thought/action log (chat-style) ---------------- */
 const QUALITY_ICON = {perfect:"🏆", good:"✓", neutral:"·", bad:"⚠", mistake:"✗", wasted:"—"};
@@ -134,12 +149,16 @@ async function geminiAct(state, history, temperature, sessionId){
     headers: {"Content-Type": "application/json"},
     body: JSON.stringify({
       state, history, temperature, session_id: sessionId,
-      preset: $("olPreset").value,
-      custom_instructions: $("olCustomInstructions").value.trim() || undefined,
+      system_prompt: $("olSystemPrompt").value,
+      include_example: $("olIncludeExample").checked,
     }),
   });
   const data = await res.json();
   if(!res.ok) throw new Error(data.error || "server error");
+  if(data.system_prompt_used !== undefined){
+    $("olLastPrompt").textContent =
+      "── SYSTEM ──\n" + data.system_prompt_used + "\n\n── USER ──\n" + data.user_prompt_used;
+  }
   return data;
 }
 
@@ -225,3 +244,4 @@ async function maybeLoadCustomPack(){
 maybeLoadCustomPack();
 checkGeminiStatus();
 refreshLeaderboard();
+loadPromptTemplates();

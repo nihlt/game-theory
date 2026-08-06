@@ -50,16 +50,19 @@
         <input id="olDelay" class="grow" type="range" min="0" max="2000" step="100" value="400">
       </div>
       <div class="field">
-        <label>prompt detail</label>
-        <select id="olPreset">
-          <option value="minimal">Minimal — bare rules, terse</option>
-          <option value="standard" selected>Standard — rules + strategy</option>
-          <option value="detailed">Detailed — full strategy + caveats</option>
-        </select>
+        <label>system prompt (sent to the model as-is — fully editable)</label>
+        <textarea id="olSystemPrompt" style="min-height:220px; font-family:ui-monospace,Consolas,monospace; font-size:12px;"></textarea>
+        <div class="row" style="margin-top:6px">
+          <select id="olTemplatePicker" class="grow">
+            <option value="minimal">Minimal — bare rules</option>
+            <option value="standard" selected>Standard — full rules</option>
+            <option value="detailed">Detailed — rules + edge cases</option>
+          </select>
+          <button id="olLoadTemplate" title="overwrite the box above with this template">Load</button>
+        </div>
       </div>
-      <div class="field">
-        <label>custom instructions (optional)</label>
-        <textarea id="olCustomInstructions" placeholder="e.g. Prioritize energy pellets over speed. Avoid revisiting the same tile twice in a row."></textarea>
+      <div class="row">
+        <label class="small" style="margin-top:0"><input type="checkbox" id="olIncludeExample"> include a worked example from a successful human run</label>
       </div>
       <div class="row">
         <button id="olStart" class="primary grow">▶ Start LLM run</button>
@@ -67,6 +70,10 @@
       </div>
       <div class="small" id="olStatus">Vertex AI status: checking…</div>
       <div class="small" id="olUsage">0 calls · 0 tokens · $0.0000</div>
+      <details style="margin-top:8px">
+        <summary>Last prompt sent (exact text, this step)</summary>
+        <pre id="olLastPrompt" class="box small mono" style="margin-top:6px; max-height:260px; overflow:auto; white-space:pre-wrap">–</pre>
+      </details>
     </div>
 
     <div class="panel">
