@@ -9,79 +9,81 @@
 <body>
 <div class="wrap">
   <header>
-    <h1>LS20&nbsp;LAB <span>· Locksmith replica · agent–human game-theory arena</span></h1>
-    <div>
-      <button id="btnNewRun" class="primary">NEW RUN (HUMAN)</button>
-      <button id="btnExport">EXPORT SESSION → data/</button>
-      <a class="nav" href="editor.html" style="color:var(--accent2);text-decoration:none;font-size:12px;margin-left:8px">level editor →</a>
+    <h1>LS20 Lab <span>Locksmith replica · human vs LLM arena</span></h1>
+    <div class="row">
+      <button id="btnNewRun" class="primary">New run (human)</button>
+      <button id="btnExport">Export session</button>
+      <a class="link" href="editor.html">Level editor →</a>
     </div>
   </header>
 
   <div class="panel">
     <div class="hud">
-      <div class="chip">LEVEL <b id="hudLevel">–</b>/<span id="hudMax">6</span></div>
-      <div class="chip">ACTIONS <b id="hudActions">0</b></div>
-      <div class="chip">RESETS <b id="hudResets">0</b></div>
-      <div class="chip">ENERGY <div id="energybar" style="display:inline-block;vertical-align:middle;margin-left:6px;"><div id="energyfill"></div></div></div>
+      <div class="chip">Level <b id="hudLevel">–</b>/<span id="hudMax">6</span></div>
+      <div class="chip">Actions <b id="hudActions">0</b></div>
+      <div class="chip">Resets <b id="hudResets">0</b></div>
+      <div class="chip">Energy <div id="energybar"><div id="energyfill"></div></div></div>
     </div>
     <canvas id="board" width="650" height="550"></canvas>
     <div class="controls">
-      <button data-act="UP">↑ UP</button><button data-act="DOWN">↓ DOWN</button>
-      <button data-act="LEFT">← LEFT</button><button data-act="RIGHT">→ RIGHT</button>
-      <button id="btnUndo">UNDO (Z)</button><button id="btnReset">RESET (R)</button>
+      <button data-act="UP">↑ Up</button><button data-act="DOWN">↓ Down</button>
+      <button data-act="LEFT">← Left</button><button data-act="RIGHT">→ Right</button>
+      <button id="btnUndo">Undo (Z)</button><button id="btnReset">Reset (R)</button>
     </div>
     <div class="dpad">
       <button class="u" data-act="UP">▲</button><button class="l" data-act="LEFT">◀</button>
       <button class="d" data-act="DOWN">▼</button><button class="r" data-act="RIGHT">▶</button>
     </div>
-    <div id="log" style="margin-top:12px"></div>
+    <div id="log"></div>
   </div>
 
   <div class="right-col">
     <div class="panel">
-      <h2>LLM Player (Gemini · Vertex AI)</h2>
-      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-        <div id="olModelLabel" class="small" style="flex:1;min-width:140px;padding:8px;border:1px solid var(--line);border-radius:6px">–</div>
+      <h2>LLM player (Gemini · Vertex AI)</h2>
+      <div class="row">
+        <div id="olModelLabel" class="box small grow" style="margin-top:0">–</div>
         <button id="olRefresh" title="recheck Vertex AI status">⟳</button>
       </div>
-      <div style="display:flex;gap:8px;margin-top:8px;align-items:center">
-        <label class="small" style="margin:0">delay <span id="olDelayVal">400</span>ms</label>
-        <input id="olDelay" type="range" min="0" max="2000" step="100" value="400" style="flex:1">
+      <div class="row">
+        <label class="small" style="margin-top:0">delay <span id="olDelayVal">400</span>ms</label>
+        <input id="olDelay" class="grow" type="range" min="0" max="2000" step="100" value="400">
       </div>
-      <div style="margin-top:8px">
-        <label class="small" style="margin:0 0 4px;display:block">prompt detail</label>
-        <select id="olPreset" style="width:100%">
+      <div class="field">
+        <label>prompt detail</label>
+        <select id="olPreset">
           <option value="minimal">Minimal — bare rules, terse</option>
           <option value="standard" selected>Standard — rules + strategy</option>
           <option value="detailed">Detailed — full strategy + caveats</option>
         </select>
       </div>
-      <div style="margin-top:8px">
-        <label class="small" style="margin:0 0 4px;display:block">custom instructions (optional)</label>
-        <textarea id="olCustomInstructions" placeholder="e.g. Prioritize energy pellets over speed. Avoid revisiting the same tile twice in a row."
-          style="width:100%;min-height:56px;resize:vertical;font:inherit;background:var(--void);color:inherit;border:1px solid var(--line);border-radius:6px;padding:6px"></textarea>
+      <div class="field">
+        <label>custom instructions (optional)</label>
+        <textarea id="olCustomInstructions" placeholder="e.g. Prioritize energy pellets over speed. Avoid revisiting the same tile twice in a row."></textarea>
       </div>
-      <div style="display:flex;gap:8px;margin-top:10px">
-        <button id="olStart" class="primary" style="flex:1">▶ LLM RUN</button>
-        <button id="olStop" disabled style="flex:1">■ STOP</button>
+      <div class="row">
+        <button id="olStart" class="primary grow">▶ Start LLM run</button>
+        <button id="olStop" class="grow" disabled>■ Stop</button>
       </div>
       <div class="small" id="olStatus">Vertex AI status: checking…</div>
-      <div class="small" id="olThought" style="max-height:120px;overflow:auto;color:var(--accent2);white-space:pre-wrap"></div>
-      <div class="small" id="olUsage" style="margin-top:6px;color:var(--accent2)">0 calls · 0 tokens · $0.0000</div>
+      <div class="small mono" id="olThought" style="max-height:120px;overflow:auto"></div>
+      <div class="small" id="olUsage">0 calls · 0 tokens · $0.0000</div>
     </div>
 
     <div class="panel">
-      <h2>Leaderboard <label class="small" style="float:right"><input type="checkbox" id="lbSession" checked> this session only</label></h2>
-      <table id="lb"><thead><tr><th>#</th><th>Player</th><th>Type</th><th>Lvls</th><th>Actions</th><th>Time</th></tr></thead><tbody></tbody></table>
+      <div class="row between">
+        <h2 style="margin-bottom:0">Leaderboard</h2>
+        <label class="small" style="margin-top:0"><input type="checkbox" id="lbSession" checked> this session only</label>
+      </div>
+      <table id="lb" style="margin-top:12px"><thead><tr><th>#</th><th>Player</th><th>Type</th><th>Lvls</th><th>Actions</th><th>Time</th></tr></thead><tbody></tbody></table>
       <div class="small">Ranking: levels completed ↓, then total actions ↑ (ARC-AGI-3 tiebreak). Stored in SQLite; each run also lands in <code>data/</code> as JSON.</div>
     </div>
 
     <div class="panel">
-      <h2>Manual (human editor)</h2>
+      <h2>Manual (human player)</h2>
       <div class="manual">
         You are the <b>keysmith block</b>. Reach the <b>door</b> — it opens only when your key's
         <b>shape</b>, <b>color</b> and <b>rotation</b> all match the pattern drawn on the door.
-        <details open><summary>MECHANICS</summary>
+        <details open><summary>Mechanics</summary>
           <div class="legend" id="legend"></div>
           <div style="margin-top:8px">
             <span class="k">Rotator ✚</span> — step on it: key rotation +90°.<br>
@@ -94,10 +96,10 @@
             Changers re-trigger every time you <i>enter</i> the tile — bounce on/off to cycle repeatedly.
           </div>
         </details>
-        <details><summary>CONTROLS</summary>
+        <details><summary>Controls</summary>
           Arrow keys / WASD / buttons. <b>Z</b> undo · <b>R</b> reset level.
         </details>
-        <details><summary>PROGRAMMATIC API</summary>
+        <details><summary>Programmatic API</summary>
           <code>window.LS20.getState()</code> → JSON observation<br>
           <code>window.LS20.step("UP")</code> → {frame, result}<br>
           <code>window.LS20.startRun(name, "llm", model)</code>,
@@ -108,25 +110,25 @@
 
     <div class="panel">
       <h2>Key preview</h2>
-      <canvas id="keyPreview" width="120" height="120" style="display:block;margin:0 auto;border:1px solid var(--line);border-radius:6px;background:var(--void)"></canvas>
-      <div class="small" style="text-align:center" id="keyDesc">–</div>
+      <canvas id="keyPreview" width="120" height="120" style="display:block;margin:0 auto;background:var(--void);border:1px solid var(--line);border-radius:6px"></canvas>
+      <div class="small center-text" id="keyDesc">–</div>
     </div>
   </div>
 </div>
 
 <dialog id="dlgStart">
-  <h2 style="color:var(--accent);letter-spacing:2px;margin-bottom:12px">NEW HUMAN RUN</h2>
+  <h2>New human run</h2>
   <label>Player name</label>
   <input id="inName" placeholder="e.g. Olek" maxlength="24">
-  <div style="display:flex;gap:8px;justify-content:flex-end">
+  <div class="row end">
     <button id="btnCancel">Cancel</button><button id="btnGo" class="primary">Start</button>
   </div>
 </dialog>
 
 <dialog id="dlgWin">
-  <h2 style="color:var(--good);letter-spacing:2px;margin-bottom:12px">RUN COMPLETE 🎉</h2>
+  <h2 style="color:var(--good)">Run complete 🎉</h2>
   <div id="winStats" style="line-height:1.8;font-size:14px"></div>
-  <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px">
+  <div class="row end" style="margin-top:14px">
     <button id="btnWinClose" class="primary">Close</button>
   </div>
 </dialog>
