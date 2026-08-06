@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LS20 Lab — Locksmith Replica · Human vs LLM Arena</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>LS20&nbsp;LAB <span>· Locksmith replica · agent–human game-theory arena</span></h1>
+    <div>
+      <button id="btnNewRun" class="primary">NEW RUN (HUMAN)</button>
+      <button id="btnExport">EXPORT SESSION → data/</button>
+      <a class="nav" href="editor.html" style="color:var(--accent2);text-decoration:none;font-size:12px;margin-left:8px">level editor →</a>
+    </div>
+  </header>
+
+  <div class="panel">
+    <div class="hud">
+      <div class="chip">LEVEL <b id="hudLevel">–</b>/<span id="hudMax">6</span></div>
+      <div class="chip">ACTIONS <b id="hudActions">0</b></div>
+      <div class="chip">RESETS <b id="hudResets">0</b></div>
+      <div class="chip">ENERGY <div id="energybar" style="display:inline-block;vertical-align:middle;margin-left:6px;"><div id="energyfill"></div></div></div>
+    </div>
+    <canvas id="board" width="650" height="550"></canvas>
+    <div class="controls">
+      <button data-act="UP">↑ UP</button><button data-act="DOWN">↓ DOWN</button>
+      <button data-act="LEFT">← LEFT</button><button data-act="RIGHT">→ RIGHT</button>
+      <button id="btnUndo">UNDO (Z)</button><button id="btnReset">RESET (R)</button>
+    </div>
+    <div class="dpad">
+      <button class="u" data-act="UP">▲</button><button class="l" data-act="LEFT">◀</button>
+      <button class="d" data-act="DOWN">▼</button><button class="r" data-act="RIGHT">▶</button>
+    </div>
+    <div id="log" style="margin-top:12px"></div>
+  </div>
+
+  <div class="right-col">
+    <div class="panel">
+      <h2>LLM Player (Gemini · Vertex AI)</h2>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <div id="olModelLabel" class="small" style="flex:1;min-width:140px;padding:8px;border:1px solid var(--line);border-radius:6px">–</div>
+        <button id="olRefresh" title="recheck Vertex AI status">⟳</button>
+      </div>
+      <div style="display:flex;gap:8px;margin-top:8px;align-items:center">
+        <label class="small" style="margin:0">delay <span id="olDelayVal">400</span>ms</label>
+        <input id="olDelay" type="range" min="0" max="2000" step="100" value="400" style="flex:1">
+      </div>
+      <div style="display:flex;gap:8px;margin-top:10px">
+        <button id="olStart" class="primary" style="flex:1">▶ LLM RUN</button>
+        <button id="olStop" disabled style="flex:1">■ STOP</button>
+      </div>
+      <div class="small" id="olStatus">Vertex AI status: checking…</div>
+      <div class="small" id="olThought" style="max-height:64px;overflow:hidden;color:var(--accent2)"></div>
+      <div class="small" id="olUsage" style="margin-top:6px;color:var(--accent2)">0 calls · 0 tokens · $0.0000</div>
+    </div>
+
+    <div class="panel">
+      <h2>Leaderboard <label class="small" style="float:right"><input type="checkbox" id="lbSession" checked> this session only</label></h2>
+      <table id="lb"><thead><tr><th>#</th><th>Player</th><th>Type</th><th>Lvls</th><th>Actions</th><th>Time</th></tr></thead><tbody></tbody></table>
+      <div class="small">Ranking: levels completed ↓, then total actions ↑ (ARC-AGI-3 tiebreak). Stored in SQLite; each run also lands in <code>data/</code> as JSON.</div>
+    </div>
+
+    <div class="panel">
+      <h2>Manual (human editor)</h2>
+      <div class="manual">
+        You are the <b>keysmith block</b>. Reach the <b>door</b> — it opens only when your key's
+        <b>shape</b>, <b>color</b> and <b>rotation</b> all match the pattern drawn on the door.
+        <details open><summary>MECHANICS</summary>
+          <div class="legend" id="legend"></div>
+          <div style="margin-top:8px">
+            <span class="k">Rotator ✚</span> — step on it: key rotation +90°.<br>
+            <span class="k">Shape changer ◇</span> — cycles the key's shape.<br>
+            <span class="k">Color changer ▦</span> — cycles the key's color.<br>
+            <span class="k">Energy pellet ●</span> — refills your step budget (single-use).<br>
+            <span class="k">Piston ⇥</span> — shoves you several cells until you hit a wall.<br>
+            <span class="k">Portal ◎</span> — teleports you to the paired portal.<br>
+            Every action costs <b>1 energy</b>. Energy 0 ⇒ level resets (key & pellets restored).
+            Changers re-trigger every time you <i>enter</i> the tile — bounce on/off to cycle repeatedly.
+          </div>
+        </details>
+        <details><summary>CONTROLS</summary>
+          Arrow keys / WASD / buttons. <b>Z</b> undo · <b>R</b> reset level.
+        </details>
+        <details><summary>PROGRAMMATIC API</summary>
+          <code>window.LS20.getState()</code> → JSON observation<br>
+          <code>window.LS20.step("UP")</code> → {frame, result}<br>
+          <code>window.LS20.startRun(name, "llm", model)</code>,
+          <code>window.LS20.reset()</code>
+        </details>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>Key preview</h2>
+      <canvas id="keyPreview" width="120" height="120" style="display:block;margin:0 auto;border:1px solid var(--line);border-radius:6px;background:var(--void)"></canvas>
+      <div class="small" style="text-align:center" id="keyDesc">–</div>
+    </div>
+  </div>
+</div>
+
+<dialog id="dlgStart">
+  <h2 style="color:var(--accent);letter-spacing:2px;margin-bottom:12px">NEW HUMAN RUN</h2>
+  <label>Player name</label>
+  <input id="inName" placeholder="e.g. Olek" maxlength="24">
+  <div style="display:flex;gap:8px;justify-content:flex-end">
+    <button id="btnCancel">Cancel</button><button id="btnGo" class="primary">Start</button>
+  </div>
+</dialog>
+
+<dialog id="dlgWin">
+  <h2 style="color:var(--good);letter-spacing:2px;margin-bottom:12px">RUN COMPLETE 🎉</h2>
+  <div id="winStats" style="line-height:1.8;font-size:14px"></div>
+  <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px">
+    <button id="btnWinClose" class="primary">Close</button>
+  </div>
+</dialog>
+
+<script src="shapes.js"></script>
+<script src="engine.js"></script>
+<script src="client.js"></script>
+</body>
+</html>

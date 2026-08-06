@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Gemini Live Proof — LS20 Lab</title>
+<style>
+  :root { color-scheme: dark; }
+  body { background:#0b0f14; color:#d6e2ea; font-family:"Consolas","SF Mono",monospace;
+         max-width:820px; margin:40px auto; padding:0 20px; }
+  h1 { color:#f5c518; font-size:20px; margin-bottom:4px; }
+  .sub { color:#7d8b96; font-size:13px; margin-bottom:24px; }
+  textarea { width:100%; height:70px; background:#131a21; color:#d6e2ea; border:1px solid #2a3540;
+             border-radius:6px; padding:10px; font-family:inherit; font-size:14px; resize:vertical; }
+  button { margin-top:10px; background:#f5c518; color:#111; border:none; border-radius:6px;
+           padding:10px 18px; font-weight:bold; font-family:inherit; cursor:pointer; font-size:14px; }
+  button:disabled { background:#5a5a3a; cursor:wait; }
+  .status { margin-top:10px; font-size:13px; }
+  .ok { color:#5fd67a; } .err { color:#ff6b6b; } .pending { color:#f5c518; }
+  .proof { margin-top:20px; border:1px solid #2a3540; border-radius:8px; overflow:hidden; }
+  .proof-row { display:flex; justify-content:space-between; padding:8px 14px; font-size:13px;
+               border-bottom:1px solid #1c242b; }
+  .proof-row:last-child { border-bottom:none; }
+  .proof-row .k { color:#7d8b96; } .proof-row .v { color:#d6e2ea; text-align:right; }
+  .answer { margin-top:16px; padding:14px; background:#131a21; border-radius:8px; border:1px solid #2a3540;
+            font-size:15px; white-space:pre-wrap; min-height:24px; }
+  .raw-toggle { margin-top:10px; font-size:12px; color:#7d8b96; cursor:pointer; text-decoration:underline; }
+  pre#raw { display:none; margin-top:8px; background:#0e1318; padding:12px; border-radius:6px;
+            font-size:11px; overflow-x:auto; max-height:300px; }
+  .why { margin-top:28px; font-size:12px; color:#5a6a75; line-height:1.6; }
+  a { color:#6cb4ff; }
+</style>
+</head>
+<body>
+  <h1>Gemini Live Proof</h1>
+  <div class="sub">Sends your prompt to Vertex AI Gemini via ADC (no API key, no mock) and shows fields only Google's server can produce.</div>
+
+  <textarea id="prompt">Say a random 4-digit number and one fun fact about it.</textarea>
+  <br>
+  <button id="send">Send to Gemini</button>
+  <div class="status" id="status"></div>
+
+  <div class="answer" id="answer" style="display:none;"></div>
+
+  <div class="proof" id="proof" style="display:none;"></div>
+  <div class="raw-toggle" id="rawToggle" style="display:none;">show raw API response ▾</div>
+  <pre id="raw"></pre>
+
+  <div class="why">
+    Why this proves it's live, not a mock: <b>responseId</b> and <b>createTime</b> are minted by
+    Google's server per-request — a hardcoded response can't produce a fresh one each time.
+    <b>latency_ms</b> is measured by this page's own server around the real HTTPS round trip to
+    <code>{location}-aiplatform.googleapis.com</code>. <b>usageMetadata</b> token counts vary with
+    your exact prompt text, which a canned reply couldn't compute. Ask a different question and
+    watch all four values change.
+  </div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+
+$('send').addEventListener('click', async () => {
+  const prompt = $('prompt').value.trim();
+  if (!prompt) return;
+  $('send').disabled = true;
+  $('status').innerHTML = '<span class="pending">sending to Vertex AI…</span>';
+  $('answer').style.display = 'none';
+  $('proof').style.display = 'none';
+  $('rawToggle').style.display = 'none';
+  $('raw').style.display = 'none';
+
+  const clientStart = performance.now();
+  try {
+    const res = await fetch('/api/gemini/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt }),
+    });
+    const clientMs = Math.round(performance.now() - clientStart);
+    const data = await res.json();
+
+    if (!res.ok || !data.ok) {
+      $('status').innerHTML = `<span class="err">✗ ${data.error || res.statusText}</span>`;
+      $('send').disabled = false;
+      return;
+    }
+
+    $('status').innerHTML = '<span class="ok">✓ live response received</span>';
+    $('answer').style.display = 'block';
+    $('answer').textContent = data.text || '(empty text field — see raw response)';
+
+    const usage = data.raw.usageMetadata || {};
+    const rows = [
+      ['model (server-reported)', data.raw.modelVersion || data.model],
+      ['responseId', data.raw.responseId || '—'],
+      ['createTime (Google server clock)', data.raw.createTime || '—'],
+      ['server-measured latency', `${data.latency_ms} ms`],
+      ['round-trip incl. browser', `${clientMs} ms`],
+      ['prompt tokens', usage.promptTokenCount ?? '—'],
+      ['response tokens', usage.candidatesTokenCount ?? '—'],
+      ['project / location', `${data.project} / ${data.location}`],
+    ];
+    $('proof').innerHTML = rows.map(([k, v]) =>
+      `<div class="proof-row"><span class="k">${k}</span><span class="v">${v}</span></div>`
+    ).join('');
+    $('proof').style.display = 'block';
+
+    $('raw').textContent = JSON.stringify(data.raw, null, 2);
+    $('rawToggle').style.display = 'block';
+  } catch (e) {
+    $('status').innerHTML = `<span class="err">✗ ${e.message}</span>`;
+  }
+  $('send').disabled = false;
+});
+
+$('rawToggle').addEventListener('click', () => {
+  const el = $('raw');
+  const showing = el.style.display === 'block';
+  el.style.display = showing ? 'none' : 'block';
+  $('rawToggle').textContent = showing ? 'show raw API response ▾' : 'hide raw API response ▴';
+});
+</script>
+</body>
+</html>

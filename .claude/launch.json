@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "ls20-server",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["-X", "utf8", "src/server.py"],
+      "port": 8000
+    }
+  ]
+}
